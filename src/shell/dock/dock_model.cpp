@@ -73,16 +73,11 @@ namespace shell::dock {
       return false;
     }
 
-    // Position of an app in the compositor's layout, used to keep the dock's unpinned
-    // running apps in layout order instead of launch order (running_order = "layout").
-    // Apps whose windows have no tracked layout (unknown app id, or compositors without
-    // per-window coordinates) keep workspaceOrder at kLayoutOrderUnknown and sort last,
-    // in their previous relative order (stable sort).
+    // Unknown apps sort last; equal keys retain the backend's running-app order.
     struct RunningLayoutKey {
       static constexpr std::size_t kLayoutOrderUnknown = std::numeric_limits<std::size_t>::max();
 
       std::size_t workspaceOrder = kLayoutOrderUnknown;
-      bool tiled = false;
       std::int32_t x = 0;
       std::int32_t y = 0;
     };
@@ -90,9 +85,6 @@ namespace shell::dock {
     bool runningLayoutKeyLess(const RunningLayoutKey& lhs, const RunningLayoutKey& rhs) {
       if (lhs.workspaceOrder != rhs.workspaceOrder) {
         return lhs.workspaceOrder < rhs.workspaceOrder;
-      }
-      if (lhs.tiled != rhs.tiled) {
-        return lhs.tiled; // tiled windows carry real coordinates; floating/unsorted ones trail
       }
       if (lhs.x != rhs.x) {
         return lhs.x < rhs.x;
@@ -111,18 +103,15 @@ namespace shell::dock {
         workspaceOrder.emplace(displayKeys[i], i);
       }
 
-      // Reduce every app id to the topmost/leftmost of its windows. x/y are the
-      // backend's per-window layout coordinates (1-based on niri's scrolling layout;
-      // (0, 0) means the window never got scrolling coordinates, e.g. floating).
+      // Use the earliest window in workspace/column/row order. Coordinates belong
+      // to the backend: zero or negative values do not identify floating windows.
       std::unordered_map<std::string, RunningLayoutKey> keyByAppIdLower;
       for (const auto& assignment : platform.workspaceWindowAssignments(outputFilter)) {
         const auto wsIt = workspaceOrder.find(assignment.workspaceKey);
-        const std::size_t wsOrder = wsIt != workspaceOrder.end() ? wsIt->second : displayKeys.size();
-        const bool tiled = assignment.x > 0 && assignment.y > 0;
-
-        const RunningLayoutKey candidate{
-            .workspaceOrder = wsOrder, .tiled = tiled, .x = assignment.x, .y = assignment.y
-        };
+        if (wsIt == workspaceOrder.end()) {
+          continue;
+        }
+        const RunningLayoutKey candidate{.workspaceOrder = wsIt->second, .x = assignment.x, .y = assignment.y};
         auto& best = keyByAppIdLower[StringUtils::toLower(assignment.appId)];
         if (best.workspaceOrder == RunningLayoutKey::kLayoutOrderUnknown || runningLayoutKeyLess(candidate, best)) {
           best = candidate;
